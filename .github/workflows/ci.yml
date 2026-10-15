@@ -1,0 +1,213 @@
+name: Integración continua
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  PYTHONUNBUFFERED: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+
+  # ---------------------------------------------------------------- estilo
+  estilo:
+    name: Formato y estilo (ruff, black, PEP8/PEP257)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Instalar herramientas
+        run: python -m pip install "ruff>=0.6" "black>=24.0"
+
+      - name: ruff (reglas y formato)
+        run: |
+          python -m ruff check --output-format=github .
+          python -m ruff format --check .
+
+      - name: black (formato consistente)
+        run: python -m black --check --diff .
+
+  # ----------------------------------------------------------------- tipos
+  tipos:
+    name: Tipado estático (mypy, pyright)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Instalar el paquete y las herramientas
+        run: |
+          python -m pip install -e .
+          python -m pip install "mypy>=1.11" "pyright>=1.1.380"
+
+      - name: mypy
+        run: python -m mypy src tests json2csv.py
+
+      - name: pyright
+        run: python -m pyright
+
+  # ------------------------------------------------------------- seguridad
+  seguridad:
+    name: Seguridad (bandit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Instalar bandit
+        run: python -m pip install "bandit>=1.7"
+
+      - name: bandit sobre el código del paquete
+        run: python -m bandit -r src -c pyproject.toml --severity-level low --confidence-level low
+
+  # --------------------------------------------------------------- pruebas
+  pruebas:
+    name: Pruebas y cobertura (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Instalar el paquete y las herramientas de prueba
+        run: |
+          python -m pip install -e .
+          python -m pip install "pytest>=8.0" "pytest-cov>=5.0"
+
+      - name: pytest con cobertura mínima del 85%
+        run: python -m pytest --cov-report=term-missing
+
+      - name: Guardar el informe de cobertura
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cobertura
+          path: coverage.xml
+          if-no-files-found: error
+
+  # ----------------------------------------------------------- documentación
+  documentacion:
+    name: Documentación automática (pdoc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Instalar el paquete y pdoc
+        run: |
+          python -m pip install -e .
+          python -m pip install "pdoc>=14.0"
+
+      - name: Generar la documentación de la API
+        run: python -m pdoc --output-dir docs/api json2csv_tool
+
+      - name: Guardar la documentación generada
+        uses: actions/upload-artifact@v4
+        with:
+          name: documentacion-api
+          path: docs/api
+          if-no-files-found: error
+
+      - name: Publicar en GitHub Pages (solo en la rama principal)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: docs/api
+          commit_message: "docs: actualizar documentación de la API [${{ github.sha }}]"
+
+  # -------------------------------------------------------------- versionado
+  versionado:
+    name: Registro de VERSION y BUILD
+    runs-on: ubuntu-latest
+    needs: [estilo, tipos, seguridad, pruebas]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Leer e incrementar BUILD
+        id: version
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          BUILD="$(tr -d '[:space:]' < BUILD)"
+          if [ -z "$BUILD" ]; then BUILD=0; fi
+          NUEVO=$((BUILD + 1))
+          echo "$NUEVO" > BUILD
+          {
+            echo "## Registro de versión"
+            echo ""
+            echo "| Dato | Valor |"
+            echo "|------|-------|"
+            echo "| VERSION | \`$VERSION\` |"
+            echo "| BUILD anterior | \`$BUILD\` |"
+            echo "| BUILD nuevo | \`$NUEVO\` |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build=$NUEVO" >> "$GITHUB_OUTPUT"
+
+      - name: Confirmar el nuevo BUILD
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add BUILD
+          if git diff --cached --quiet; then
+            echo "BUILD sin cambios."
+          else
+            git commit -m "build: incrementar BUILD a ${{ steps.version.outputs.build }}"
+            git push
+          fi
+
+  # ------------------------------------------------------------- verificación
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    needs: [estilo, tipos, seguridad, pruebas, documentacion]
+    if: always()
+    steps:
+      - name: Verificar el resultado de todas las etapas
+        run: |
+          echo "estilo=${{ needs.estilo.result }}"
+          echo "tipos=${{ needs.tipos.result }}"
+          echo "seguridad=${{ needs.seguridad.result }}"
+          echo "pruebas=${{ needs.pruebas.result }}"
+          echo "documentacion=${{ needs.documentacion.result }}"
+          if [ "${{ contains(needs.*.result, 'failure') }}" = "true" ]; then
+            echo "::error::Alguna etapa de la integración continua falló."
+            exit 1
+          fi
+          if [ "${{ contains(needs.*.result, 'cancelled') }}" = "true" ]; then
+            echo "::error::Alguna etapa de la integración continua fue cancelada."
+            exit 1
+          fi
+          echo "Todas las etapas de la integración continua pasaron."
+
