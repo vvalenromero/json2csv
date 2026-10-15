@@ -1,0 +1,32 @@
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Cachés de Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Herramientas
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.bandit/
+*.egg-info/
+build/
+dist/
+
+# Documentación generada automáticamente
+docs/api/
+
+# Editores
+.vscode/
+.idea/
+*.swp
+.DS_Store

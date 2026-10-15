@@ -1,0 +1,9 @@
+# Dependencias de ejecución.
+#
+# El proyecto funciona únicamente con la biblioteca estándar de Python 3:
+# argparse, csv, json, pathlib y sys. No requiere ninguna librería externa,
+# y por eso este archivo no declara dependencias.
+#
+# Se mantiene de todos modos, como pide el enunciado, para que el ambiente
+# virtual se arme siempre con el mismo comando y para dejar constancia
+# explícita de la ausencia de dependencias.
